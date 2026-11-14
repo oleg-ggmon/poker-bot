@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.DS_Store
+
+# downloaded hand histories: large, re-download with fetch_hands.py
+hands/
