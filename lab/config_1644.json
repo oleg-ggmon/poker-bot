@@ -1,0 +1,66 @@
+{
+ "DEFAULT_PRIOR": {
+  "vpip": 0.241,
+  "pfr": 0.162,
+  "tb": 0.08,
+  "shove": 0.007,
+  "af": 0.415,
+  "ftb": 0.508,
+  "cbig": 0.15,
+  "fr": 0.777,
+  "f3": 0.672
+ },
+ "FOLD_PRIOR": [
+  [
+   0.359,
+   0.549,
+   0.682,
+   0.78
+  ],
+  [
+   0.253,
+   0.454,
+   0.533,
+   0.674
+  ]
+ ],
+ "BLUFF_PRIOR": [
+  0.269,
+  0.2,
+  0.067
+ ],
+ "PARAMS": {
+  "open": [
+   0.0,
+   0.4,
+   0.45,
+   0.3,
+   0.21,
+   0.15,
+   0.1,
+   0.08
+  ],
+  "bb_def": 0.15,
+  "open_bb": 2.5,
+  "tb_frac": 0.22,
+  "call_frac": 0.75,
+  "allin_margin": 0.03,
+  "value": 0.6,
+  "bet_edge": 0.015,
+  "light3": 0.68,
+  "war_eq": 0.56,
+  "raise_min": 0.7,
+  "raise_edge": 0.1,
+  "shove_ev": 0.05,
+  "raise": 0.78,
+  "call_margin": 0.04,
+  "early_margin": 0.03,
+  "bet_med": 0.62,
+  "bet_big": 0.85,
+  "cbet_size": 0.45,
+  "cbet_freq": 0.75,
+  "bluff_edge": 0.03,
+  "mc_ms": 1.0,
+  "tb_eq": 0.6
+ }
+}

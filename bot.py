@@ -10,10 +10,9 @@ import random
 import time
 
 _pc = time.perf_counter
-DEBUG = False
 
 #@CONFIG_START@
-PARAMS = {"open": [0.0, 0.4, 0.45, 0.3, 0.21, 0.15, 0.1, 0.08], "bb_def": 0.15, "open_bb": 2.5, "tb_frac": 0.22, "call_frac": 0.75, "allin_margin": 0.03, "value": 0.6, "bet_edge": 0.015, "light3": 0.68, "war_eq": 0.56, "raise_min": 0.7, "raise_edge": 0.1, "shove_ev": 0.05, "raise": 0.78, "call_margin": 0.04, "early_margin": 0.03, "bet_med": 0.62, "bet_big": 0.85, "cbet_size": 0.45, "cbet_freq": 0.75, "bluff_edge": 0.03, "mc_ms": 1.0, "tb_eq": 0.6}
+PARAMS = {"open": [0.0, 0.4, 0.45, 0.3, 0.21, 0.15, 0.1, 0.08], "bb_def": 0.15, "open_bb": 2.5, "tb_frac": 0.22, "call_frac": 0.75, "allin_margin": 0.03, "value": 0.6, "bet_edge": 0.015, "light3": 0.68, "war_eq": 0.56, "raise_min": 0.7, "raise_edge": 0.1, "shove_ev": 0.05, "raise": 0.78, "call_margin": 0.04, "early_margin": 0.03, "bet_med": 0.62, "bet_big": 0.85, "cbet_size": 0.45, "cbet_freq": 0.75, "bluff_edge": 0.03, "mc_ms": 1.0, "tb_eq": 0.6, "oop_fold": [0.72, 0.72, 0.72, 0.72], "commit_spr": 0.85, "commit_mult": 1.0}
 DEFAULT_PRIOR = {"vpip": 0.239, "pfr": 0.16, "tb": 0.08, "shove": 0.01, "af": 0.39, "ftb": 0.493, "cbig": 0.2, "fr": 0.782, "f3": 0.604}
 FOLD_PRIOR = [[0.397, 0.548, 0.675, 0.795], [0.231, 0.401, 0.503, 0.616]]
 BLUFF_PRIOR = [0.253, 0.215, 0.095]
@@ -83,6 +82,75 @@ def ev(cards):
             if st:
                 return (8 << 26) | st
             return (5 << 26) | TOP5[sm]
+    if m4:
+        q = m4.bit_length() - 1
+        return (7 << 26) | (q << 4) | ((m1 ^ (1 << q)).bit_length() - 1)
+    t = 0
+    if m3:
+        t = m3.bit_length() - 1
+        r = m2 ^ (1 << t)
+        if r:
+            return (6 << 26) | (t << 4) | (r.bit_length() - 1)
+    st = STRAIGHT[m1]
+    if st:
+        return (4 << 26) | st
+    if m3:
+        return (3 << 26) | (t << 13) | TOP2[m1 ^ (1 << t)]
+    if m2:
+        p = m2.bit_length() - 1
+        r = m2 ^ (1 << p)
+        if r:
+            p2 = r.bit_length() - 1
+            return (2 << 26) | (p << 8) | (p2 << 4) | ((m1 ^ (1 << p) ^ (1 << p2)).bit_length() - 1)
+        return (1 << 26) | (p << 13) | TOP3[m1 ^ (1 << p)]
+    return TOP5[m1]
+
+
+RB = [1 << (c >> 2) for c in range(52)]
+
+
+def prep(cards):
+    """Evaluator state for up to five cards, ready to be completed by two more with ev2.
+
+    (rank masks by multiplicity 1..4, the suit that can still make a flush or -1, that suit's rank mask)"""
+    m1 = m2 = m3 = m4 = 0
+    s = [0, 0, 0, 0]
+    for c in cards:
+        b = RB[c]
+        s[c & 3] |= b
+        m4 |= m3 & b
+        m3 |= m2 & b
+        m2 |= m1 & b
+        m1 |= b
+    for i in range(4):
+        if POP[s[i]] >= 3:
+            return (m1, m2, m3, m4, i, s[i])
+    return (m1, m2, m3, m4, -1, 0)
+
+
+def ev2(pre, c1, c2):
+    """ev(cards + [c1, c2]) where pre = prep(cards). Same values as ev."""
+    m1, m2, m3, m4, fs, fm = pre
+    b = RB[c1]
+    m4 |= m3 & b
+    m3 |= m2 & b
+    m2 |= m1 & b
+    m1 |= b
+    b2 = RB[c2]
+    m4 |= m3 & b2
+    m3 |= m2 & b2
+    m2 |= m1 & b2
+    m1 |= b2
+    if fs >= 0:
+        if (c1 & 3) == fs:
+            fm |= b
+        if (c2 & 3) == fs:
+            fm |= b2
+        if POP[fm] >= 5:
+            st = STRAIGHT[fm]
+            if st:
+                return (8 << 26) | st
+            return (5 << 26) | TOP5[fm]
     if m4:
         q = m4.bit_length() - 1
         return (7 << 26) | (q << 4) | ((m1 ^ (1 << q)).bit_length() - 1)
@@ -268,7 +336,9 @@ class Opp:
 
 
 class Agent:
-    def __init__(self):
+    def __init__(self, params=None):
+        # params overrides entries of PARAMS (used by sim variants: 'bot.py:{"mc_ms": 2.0}').
+        self.P = dict(PARAMS, **params) if params else PARAMS
         self.n = 8
         self.me = 0
         self.opp = [Opp(DEFAULT_PRIOR) for _ in range(8)]
@@ -284,8 +354,6 @@ class Agent:
         self.sent = None      # (hand, index of this action among ours, action) of the last reply
         self.tmo = 0          # replies of ours the dealer replaced with check/fold (we were too slow)
         self.scale = 1.0      # thinking-time multiplier, halved on every detected timeout
-        self.dbg = []
-        self.last = None
 
     def on_table_start(self, info):
         try:
@@ -694,7 +762,7 @@ class Agent:
         return self._postflop(st, hole, board, tc, can_raise, hi, R, info, t0)
 
     def _preflop(self, st, hole, tc, can_raise, hi, R, info):
-        P = PARAMS
+        P = self.P
         L, lastr, limp, callers, role, pts, cp = info
         me = self.me
         n = self.n
@@ -732,7 +800,7 @@ class Agent:
         if L == 0:
             if tc == 0:
                 if p <= 0.12:
-                    return R((3 + limp) * bbv + mybet * 0)
+                    return R((3 + limp) * bbv)
                 return CALL
             nb = (st["button"] + 2 - me) % n if n > 2 else 1
             th = P["open"][nb if nb < 8 else 7]
@@ -786,8 +854,6 @@ class Agent:
 
         req = tc / float(pot + tc) if tc > 0 else 0.0
         t = self._range_t(lastr, role) if lastr >= 0 and lastr != me else 0.05
-        if DEBUG:
-            self.last = {"p": round(p, 3), "L": L, "t": round(t, 3), "req": round(req, 3), "callers": callers}
         cur = mybet + tc
         # Opponents who have shown real strength this hand: the last raiser, anyone who re-raised, anyone
         # already committed. They are all still to be beaten, so equity is taken against the whole group.
@@ -798,23 +864,17 @@ class Agent:
             if s == lastr or bets[s] >= 600 or (r is not None and r[0] == "r" and r[1] >= 2):
                 strong.append(s)
         m = len(strong)
-        tmin = t
         em = None
         if m >= 2:
             prod = 1.0
             for s in strong:
-                x = self._range_t(s, role)
-                if x < tmin:
-                    tmin = x
-                prod *= eqr(c, x)
+                prod *= eqr(c, self._range_t(s, role))
             e1 = EQR[c][-1]
             if m <= 3:
                 crowd = (EQ3[c] / e1) ** ((m - 1) / 2.0)
             else:
                 crowd = EQ3[c] / e1 * (EQ6[c] / EQ3[c]) ** ((m - 3) / 3.0)
             em = prod ** (1.0 / m) * crowd
-        if DEBUG:
-            self.last.update({"m": m, "tmin": round(tmin, 3), "em": em and round(em, 3), "eq1": round(eqr(c, t), 3)})
         if tc >= 0.3 * total or (lastr in role and role[lastr][2]):
             e = em if em is not None else eqr(c, t) - 0.06 * callers
             if e >= req + P["allin_margin"]:
@@ -858,7 +918,7 @@ class Agent:
         return FOLD
 
     def _postflop(self, st, hole, board, tc, can_raise, hi, R, info, t0):
-        P = PARAMS
+        P = self.P
         L, lastr, limp, callers, role, pts, cp = info
         me = self.me
         n = self.n
@@ -904,8 +964,6 @@ class Agent:
         else:
             budget = 0.3
         e = self._equity(hole, board, od, t0 + budget / 1000.0)
-        if DEBUG:
-            self.last = {"e": round(e, 3), "od": od, "sims": self.cache.get((len(board), tuple(od)), [0, 0])[1]}
         no = len(live)
         street = st["street"]
 
@@ -927,6 +985,18 @@ class Agent:
             stg = 1 if (pts[s1] > 0 or cp[s1] > 0) else 0
             tfb = self.tfb
             tfd = self.tfd
+            # fold_at pools every bet a seat has faced, but position decides a lot. On 10,500 real heads-up
+            # flop and turn bets (data/hands r002-r036) a seat that acts after the bettor folded 37% of
+            # the time where fold_at said 52%; the same gap shows in r002-r023 and in r024-r036. So when
+            # we bet first on the flop or turn, the fold chance is scaled down, by bet size bucket.
+            # 'oop_fold': [1, 1, 1, 1] gives the uncorrected numbers. A seat with chips already in
+            # postflop and little behind folds rarer still: 'commit_spr' / 'commit_mult' (1 = off).
+            fm = (1.0, 1.0, 1.0, 1.0)
+            if not ip and si < 3:
+                fm = P.get("oop_fold") or fm
+            fcm = 1.0
+            if stg and spr < P.get("commit_spr", 0.0) and (si < 3 or spr < 0.5):
+                fcm = P.get("commit_mult", 1.0)
             if e >= 0.5:
                 cands = [(0.4, 0), (0.7, 1), (1.1, 2), (2.0, 3)]
             else:
@@ -944,7 +1014,7 @@ class Agent:
             for frac, kb in cands:
                 if frac > spr:
                     frac = spr
-                f = o.fold_at(kb, stg, tfb, tfd)
+                f = o.fold_at(kb, stg, tfb, tfd) * fm[kb] * fcm
                 if frac > 3.0 and f > 0.15:
                     f = f + 0.10 if f < 0.85 else 0.95
                 wc = (e - f) / (1.0 - f) if e > f else 0.0
@@ -959,13 +1029,9 @@ class Agent:
             if bfrac:
                 if e >= 0.5:
                     if best > P["bet_edge"]:
-                        if DEBUG:
-                            self.dbg.append((self.hand, si, round(e, 2), round(bfrac, 2), stg, pot))
                         return R(mybet + bfrac * pot)
                 elif best > P["bluff_edge"] and (lastr == me or s1 in self.chk or o.fb >= 6):
                     if random.random() < P["cbet_freq"]:
-                        if DEBUG:
-                            self.dbg.append((self.hand, si, round(e, 2), round(bfrac, 2), stg, pot))
                         return R(mybet + bfrac * pot)
             return CALL
 
@@ -1065,7 +1131,18 @@ class Agent:
         rnd = random.random
         COMB = COMBOS
         NC = NCOMB
+        RBIT = RB
+        POPC = POP
         h0, h1 = hole
+        # Evaluator state of the board, extended per sample by the cards still to come.
+        bpre = prep(board)
+        B1, B2, B3, B4 = bpre[0], bpre[1], bpre[2], bpre[3]
+        S = [0, 0, 0, 0]
+        for x in board:
+            S[x & 3] |= RBIT[x]
+        if not need:
+            fpre = bpre
+            mv = ev2(bpre, h0, h1)
         w = 0.0
         cnt = 0
         while True:
@@ -1092,7 +1169,7 @@ class Agent:
                             ba = a
                             bb = b
                             break
-                        v = ev(board + [a, b])
+                        v = ev2(bpre, a, b)
                         if v > bv:
                             bv = v
                             ba = a
@@ -1100,23 +1177,52 @@ class Agent:
                     used |= (1 << ba) | (1 << bb)
                     oh.append(ba)
                     oh.append(bb)
+                    oh.append(bv)
                 if need:
-                    full = board[:]
+                    m1 = B1
+                    m2 = B2
+                    m3 = B3
+                    m4 = B4
+                    s0, s1, s2, s3 = S
                     m = need
                     while m:
                         x = deck[int(rnd() * nd)]
                         if (used >> x) & 1:
                             continue
                         used |= 1 << x
-                        full.append(x)
+                        b = RBIT[x]
+                        sx = x & 3
+                        if sx == 0:
+                            s0 |= b
+                        elif sx == 1:
+                            s1 |= b
+                        elif sx == 2:
+                            s2 |= b
+                        else:
+                            s3 |= b
+                        m4 |= m3 & b
+                        m3 |= m2 & b
+                        m2 |= m1 & b
+                        m1 |= b
                         m -= 1
-                else:
-                    full = board
-                mv = ev([h0, h1] + full)
+                    if POPC[s0] >= 3:
+                        fpre = (m1, m2, m3, m4, 0, s0)
+                    elif POPC[s1] >= 3:
+                        fpre = (m1, m2, m3, m4, 1, s1)
+                    elif POPC[s2] >= 3:
+                        fpre = (m1, m2, m3, m4, 2, s2)
+                    elif POPC[s3] >= 3:
+                        fpre = (m1, m2, m3, m4, 3, s3)
+                    else:
+                        fpre = (m1, m2, m3, m4, -1, 0)
+                    mv = ev2(fpre, h0, h1)
                 lose = False
                 ties = 1
-                for i in range(0, len(oh), 2):
-                    ov = ev([oh[i], oh[i + 1]] + full)
+                for i in range(0, len(oh), 3):
+                    ov = oh[i + 2]
+                    if need or ov < 0:
+                        # On the river a best-of-k draw was already scored on the full board.
+                        ov = ev2(fpre, oh[i], oh[i + 1])
                     if ov > mv:
                         lose = True
                         break
